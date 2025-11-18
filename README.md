@@ -20,13 +20,42 @@ A comprehensive system for extracting, storing, and semantically searching your 
 - Build a knowledge base from your AI interactions
 
 **Solution**: Prompt Harvester automatically captures, processes, and indexes all your AI conversations with:
-- ✅ Multi-platform support (Claude Code, web interfaces)
-- ✅ Real-time browser capture
-- ✅ Semantic search with RAG
-- ✅ Smart storage (summaries for large responses)
-- ✅ Project and topic tagging
+
+### Phase 1: Core Infrastructure ✅
+- ✅ Multi-platform support (Claude Code, OpenAI, Gemini, web interfaces)
+- ✅ Real-time browser capture via extension
+- ✅ PostgreSQL storage with full-text search
+- ✅ Smart storage (R2 for large conversations)
+- ✅ Automated Claude Code session parsing
+
+### Phase 2: Intelligence Layer 🚀
+- ✅ Vector embeddings (OpenAI or local models)
+- ✅ Semantic search via Qdrant
+- ✅ Hybrid search (vector + full-text)
+- ✅ NLP topic extraction with TF-IDF
 - ✅ Conversation relationship mapping
-- ✅ MCP integration for natural language queries
+- ✅ MCP integration for Claude Desktop
+
+### Phase 3: Analytics & UX 📊
+- ✅ Prompt template extraction
+- ✅ Export to multiple formats (Markdown, JSON, CSV, Obsidian)
+- ✅ Analytics views (token usage, trending topics, problem recurrence)
+- 🚧 SvelteKit dashboard (structure provided)
+- 🚧 Interactive visualizations (D3.js relationship graphs)
+
+### Phase 4: Polish (Planned)
+- Production-grade web dashboard
+- Advanced filtering and search UI
+- Automated backups with retention policy
+- Dark mode support
+- Keyboard shortcuts
+
+### Phase 5: Future Enhancements (Planned)
+- AI-generated conversation summaries (local or cloud)
+- Voice interface
+- Mobile app
+- Team collaboration
+- RAG integration for context-aware queries
 
 ## 🏗️ Architecture
 
@@ -161,6 +190,32 @@ const parser = new ClaudeCodeParser()
 const conversations = await parser.scanAll()
 console.log(`Found ${conversations.length} conversations`)
 ```
+
+### 6. Phase 2/3 Setup (Intelligence Layer & Analytics)
+
+```bash
+# Run the automated installer
+chmod +x install.sh
+./install.sh
+
+# Or manual setup:
+# 1. Install all dependencies
+bun install
+
+# 2. Update database schema with Phase 2/3 tables
+psql prompt_harvester < schema.sql
+
+# 3. Generate embeddings for existing conversations
+bun run embeddings:batch
+
+# 4. Extract topics using NLP
+bun run src/scripts/extract-topics.ts
+
+# 5. Configure MCP server for Claude integration
+# See PHASE2_SETUP.md for detailed instructions
+```
+
+For complete Phase 2/3 setup including MCP integration, semantic search, and analytics, see **[PHASE2_SETUP.md](./PHASE2_SETUP.md)**.
 
 ## 📦 Installation Steps
 
