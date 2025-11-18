@@ -1,0 +1,59 @@
+---
+title: Prompt Harvester Package Configuration
+date: 2025-11-15 00:00:00 PST
+ver: 1.0.0
+author: The Telekinetic Carrot
+model: claude-sonnet-4-5-20250929
+tags: [package-json, dependencies, npm, bun, configuration]
+---
+
+{
+  "name": "prompt-harvester",
+  "version": "1.0.0",
+  "description": "Multi-source AI conversation mining and semantic search system",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/api-server.ts",
+    "start": "bun run src/api-server.ts",
+    "parse": "bun run src/claude-code-parser.ts",
+    "parse:stats": "bun run src/claude-code-parser.ts --stats",
+    "db:setup": "psql -d prompt_harvester -f schema.sql",
+    "db:reset": "dropdb prompt_harvester && createdb prompt_harvester && bun run db:setup",
+    "test": "bun test",
+    "format": "prettier --write 'src/**/*.{ts,js,json}'",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "@qdrant/js-client-rest": "^1.9.0",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "bun-types": "^1.0.0",
+    "prettier": "^3.0.0",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0"
+  },
+  "keywords": [
+    "ai",
+    "conversation-mining",
+    "semantic-search",
+    "rag",
+    "vector-database",
+    "claude",
+    "openai",
+    "gemini"
+  ],
+  "author": "The Telekinetic Carrot",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/prompt-harvester"
+  },
+  "engines": {
+    "bun": ">=1.0.0",
+    "node": ">=18.0.0"
+  }
+}

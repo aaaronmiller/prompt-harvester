@@ -1,0 +1,89 @@
+---
+title: AI Prompt Harvester Browser Extension - Manifest
+date: 2025-11-15 00:00:00 PST
+ver: 1.0.0
+author: The Telekinetic Carrot
+model: claude-sonnet-4-5-20250929
+tags: [browser-extension, manifest-v3, chrome, firefox, web-scraping, real-time-capture]
+---
+
+{
+  "manifest_version": 3,
+  "name": "AI Prompt Harvester",
+  "version": "1.0.0",
+  "description": "Capture your AI conversation history from OpenAI, Claude, and Gemini in real-time",
+  
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  
+  "host_permissions": [
+    "https://openai.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://bard.google.com/*"
+  ],
+  
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "https://openai.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["content-openai.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": ["content-claude.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://gemini.google.com/*",
+        "https://bard.google.com/*"
+      ],
+      "js": ["content-gemini.js"],
+      "run_at": "document_start"
+    }
+  ],
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": [
+        "https://openai.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://bard.google.com/*"
+      ]
+    }
+  ]
+}
