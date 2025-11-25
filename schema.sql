@@ -139,21 +139,22 @@ CREATE INDEX idx_message_topics_confidence ON message_topics(confidence DESC);
 -- ============================================================================
 
 CREATE TABLE conversation_relationships (
-    conversation_a UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    conversation_b UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    source_conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    related_conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     similarity_score FLOAT CHECK (similarity_score >= 0 AND similarity_score <= 1),
     relationship_type VARCHAR(50) CHECK (relationship_type IN (
-        'similar', 'continuation', 'related', 'duplicate'
+        'similar', 'continuation', 'related', 'duplicate', 'builds_on', 'solves_same_problem', 'references', 'contradicts', 'near_duplicate'
     )),
     metadata JSONB DEFAULT '{}',
+    detected_at TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (conversation_a, conversation_b),
-    CHECK (conversation_a < conversation_b) -- Prevent duplicates (a,b) vs (b,a)
+    PRIMARY KEY (source_conversation_id, related_conversation_id)
 );
 
-CREATE INDEX idx_conv_rel_a ON conversation_relationships(conversation_a);
-CREATE INDEX idx_conv_rel_b ON conversation_relationships(conversation_b);
+CREATE INDEX idx_conv_rel_source ON conversation_relationships(source_conversation_id);
+CREATE INDEX idx_conv_rel_related ON conversation_relationships(related_conversation_id);
 CREATE INDEX idx_conv_rel_score ON conversation_relationships(similarity_score DESC);
+CREATE INDEX idx_conv_rel_type ON conversation_relationships(relationship_type);
 
 -- ============================================================================
 -- FULL-TEXT SEARCH
@@ -450,7 +451,7 @@ ORDER BY conversation_count DESC
 LIMIT 50;
 
 -- Recent conversations with their primary topics
-SELECT 
+SELECT
     c.id,
     c.platform,
     c.project,
@@ -465,3 +466,317 @@ WHERE c.started_at > NOW() - INTERVAL '7 days'
 GROUP BY c.id
 ORDER BY c.started_at DESC;
 */
+
+-- ============================================================================
+-- PHASE 2 & 3 ENHANCEMENTS
+-- ============================================================================
+
+-- Add topics array to conversations for quick access
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS topics TEXT[] DEFAULT '{}';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS embedding_status VARCHAR(20) DEFAULT 'pending' CHECK (embedding_status IN ('pending', 'processing', 'completed', 'failed'));
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS embedding_error TEXT;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS quality_rating INTEGER CHECK (quality_rating BETWEEN 1 AND 5);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS solved_problem BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_topics ON conversations USING GIN(topics);
+CREATE INDEX IF NOT EXISTS idx_conversations_embedding_status ON conversations(embedding_status);
+CREATE INDEX IF NOT EXISTS idx_conversations_quality ON conversations(quality_rating);
+
+-- Enhanced topics table for Phase 2
+CREATE TABLE IF NOT EXISTS conversation_topics (
+    topic_name TEXT PRIMARY KEY,
+    usage_count INTEGER DEFAULT 1,
+    first_seen TIMESTAMP DEFAULT NOW(),
+    last_seen TIMESTAMP DEFAULT NOW(),
+    category VARCHAR(100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_topics_count ON conversation_topics(usage_count DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_topics_category ON conversation_topics(category);
+
+-- Embeddings error log
+CREATE TABLE IF NOT EXISTS embeddings_error_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+    error_message TEXT NOT NULL,
+    error_type VARCHAR(100),
+    retry_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    resolved_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_errors_conversation ON embeddings_error_log(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_errors_resolved ON embeddings_error_log(resolved_at) WHERE resolved_at IS NULL;
+
+-- Prompt templates (Phase 3)
+CREATE TABLE IF NOT EXISTS prompt_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pattern TEXT NOT NULL,
+    parameterized_pattern TEXT,
+    occurrence_count INTEGER DEFAULT 0,
+    effectiveness_score REAL,
+    category TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_templates_occurrence ON prompt_templates(occurrence_count DESC);
+CREATE INDEX IF NOT EXISTS idx_templates_effectiveness ON prompt_templates(effectiveness_score DESC);
+CREATE INDEX IF NOT EXISTS idx_templates_category ON prompt_templates(category);
+
+-- Template examples (links templates to conversations)
+CREATE TABLE IF NOT EXISTS template_examples (
+    template_id UUID REFERENCES prompt_templates(id) ON DELETE CASCADE,
+    conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+    PRIMARY KEY (template_id, conversation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_template_examples_template ON template_examples(template_id);
+CREATE INDEX IF NOT EXISTS idx_template_examples_conversation ON template_examples(conversation_id);
+
+-- Template ratings
+CREATE TABLE IF NOT EXISTS template_ratings (
+    template_id UUID REFERENCES prompt_templates(id) ON DELETE CASCADE,
+    user_id TEXT, -- Anonymous user identifier
+    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+    feedback TEXT,
+    rated_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (template_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_template_ratings_template ON template_ratings(template_id);
+CREATE INDEX IF NOT EXISTS idx_template_ratings_rating ON template_ratings(rating DESC);
+
+-- Conversation summaries (for large conversations)
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    conversation_id UUID PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    summary TEXT NOT NULL,
+    summary_model VARCHAR(100), -- e.g., 'gpt-4o-mini', 'qwen2.5:7b'
+    summary_method VARCHAR(20) DEFAULT 'cloud' CHECK (summary_method IN ('cloud', 'local')),
+    quality_rating INTEGER CHECK (quality_rating BETWEEN 1 AND 5),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_summaries_created ON conversation_summaries(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_summaries_quality ON conversation_summaries(quality_rating DESC);
+
+-- ============================================================================
+-- ANALYTICS VIEWS (PHASE 3)
+-- ============================================================================
+
+-- Token usage over time
+CREATE OR REPLACE VIEW token_usage_daily AS
+SELECT
+    DATE(started_at) as date,
+    platform,
+    project,
+    SUM(total_tokens) as total_tokens,
+    COUNT(*) as conversation_count
+FROM conversations
+GROUP BY DATE(started_at), platform, project
+ORDER BY date DESC;
+
+-- Token usage trends with rolling averages
+CREATE OR REPLACE VIEW token_usage_trends AS
+SELECT
+    date,
+    platform,
+    total_tokens,
+    conversation_count,
+    AVG(total_tokens) OVER (
+        PARTITION BY platform
+        ORDER BY date
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ) as tokens_7day_avg,
+    AVG(conversation_count) OVER (
+        PARTITION BY platform
+        ORDER BY date
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ) as conversations_7day_avg
+FROM (
+    SELECT
+        DATE(started_at) as date,
+        platform,
+        SUM(total_tokens) as total_tokens,
+        COUNT(*) as conversation_count
+    FROM conversations
+    GROUP BY DATE(started_at), platform
+) daily_stats
+ORDER BY date DESC;
+
+-- Top trending topics
+CREATE OR REPLACE VIEW trending_topics AS
+SELECT
+    topic_name,
+    usage_count,
+    last_seen,
+    category,
+    (SELECT COUNT(*)
+     FROM conversations c
+     WHERE topic_name = ANY(c.topics)
+     AND c.started_at > NOW() - INTERVAL '7 days') as recent_count
+FROM conversation_topics
+ORDER BY usage_count DESC
+LIMIT 100;
+
+-- Problem recurrence detection
+CREATE OR REPLACE VIEW recurring_problems AS
+SELECT
+    unnest(topics) as topic_name,
+    COUNT(id) as occurrence_count,
+    ARRAY_AGG(id ORDER BY started_at DESC) as conversation_ids,
+    MAX(started_at) as last_occurrence,
+    project
+FROM conversations
+WHERE EXISTS (
+    SELECT 1 FROM messages m
+    WHERE m.conversation_id = conversations.id
+    AND m.role = 'user'
+    AND (
+        m.content ILIKE '%error%' OR
+        m.content ILIKE '%issue%' OR
+        m.content ILIKE '%problem%' OR
+        m.content ILIKE '%bug%' OR
+        m.content ILIKE '%failed%'
+    )
+)
+GROUP BY unnest(topics), project
+HAVING COUNT(id) >= 3
+ORDER BY occurrence_count DESC;
+
+-- Problem heat map (by project and week)
+CREATE OR REPLACE VIEW problem_heat_map AS
+SELECT
+    project,
+    DATE_TRUNC('week', started_at) as week,
+    COUNT(*) as problem_count,
+    ARRAY_AGG(DISTINCT unnest(topics)) as common_problems
+FROM conversations
+WHERE EXISTS (
+    SELECT 1 FROM messages m
+    WHERE m.conversation_id = conversations.id
+    AND m.role = 'user'
+    AND (
+        m.content ILIKE '%error%' OR
+        m.content ILIKE '%issue%' OR
+        m.content ILIKE '%problem%'
+    )
+)
+GROUP BY project, DATE_TRUNC('week', started_at)
+ORDER BY week DESC, problem_count DESC;
+
+-- Platform efficiency metrics
+CREATE OR REPLACE VIEW platform_efficiency AS
+SELECT
+    platform,
+    COUNT(*) as total_conversations,
+    AVG(message_count) as avg_messages_per_conversation,
+    AVG(total_tokens) as avg_tokens_used,
+    AVG(quality_rating) FILTER (WHERE quality_rating IS NOT NULL) as avg_quality_rating,
+    COUNT(*) FILTER (WHERE solved_problem = TRUE) * 100.0 / NULLIF(COUNT(*), 0) as success_rate_pct
+FROM conversations
+GROUP BY platform
+ORDER BY total_conversations DESC;
+
+-- Conversation details with user prompt (for semantic search results)
+CREATE OR REPLACE VIEW v_conversation_details AS
+SELECT
+    c.id,
+    c.platform,
+    c.model,
+    c.project,
+    c.started_at,
+    c.updated_at,
+    c.message_count,
+    c.total_tokens,
+    c.topics,
+    c.quality_rating,
+    c.embedding_status,
+    (SELECT m.content
+     FROM messages m
+     WHERE m.conversation_id = c.id
+     AND m.role = 'user'
+     ORDER BY m.sequence_number
+     LIMIT 1) as user_prompt,
+    (SELECT m.content
+     FROM messages m
+     WHERE m.conversation_id = c.id
+     AND m.role = 'assistant'
+     ORDER BY m.sequence_number DESC
+     LIMIT 1) as last_response,
+    (SELECT COUNT(*)
+     FROM conversation_relationships cr
+     WHERE cr.source_conversation_id = c.id) as related_count
+FROM conversations c;
+
+-- ============================================================================
+-- HELPER FUNCTIONS FOR PHASE 2/3
+-- ============================================================================
+
+-- Function: Get conversations with embeddings pending
+CREATE OR REPLACE FUNCTION get_unprocessed_conversations(limit_count INTEGER DEFAULT 100)
+RETURNS TABLE (
+    id UUID,
+    platform VARCHAR,
+    project VARCHAR,
+    started_at TIMESTAMP,
+    user_prompt TEXT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        c.id,
+        c.platform,
+        c.project,
+        c.started_at,
+        (SELECT m.content
+         FROM messages m
+         WHERE m.conversation_id = c.id
+         AND m.role = 'user'
+         ORDER BY m.sequence_number
+         LIMIT 1) as user_prompt
+    FROM conversations c
+    WHERE c.embedding_status = 'pending'
+    ORDER BY c.started_at DESC
+    LIMIT limit_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function: Get related conversations
+CREATE OR REPLACE FUNCTION get_related_conversations(conv_id UUID, min_similarity REAL DEFAULT 0.7)
+RETURNS TABLE (
+    related_id UUID,
+    relationship_type VARCHAR,
+    similarity_score REAL,
+    project VARCHAR,
+    started_at TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        cr.related_conversation_id,
+        cr.relationship_type,
+        cr.similarity_score,
+        c.project,
+        c.started_at
+    FROM conversation_relationships cr
+    JOIN conversations c ON c.id = cr.related_conversation_id
+    WHERE cr.source_conversation_id = conv_id
+    AND cr.similarity_score >= min_similarity
+    ORDER BY cr.similarity_score DESC;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function: Update topic usage count
+CREATE OR REPLACE FUNCTION increment_topic_count(topic_name_param TEXT)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO conversation_topics (topic_name, usage_count, last_seen)
+    VALUES (topic_name_param, 1, NOW())
+    ON CONFLICT (topic_name)
+    DO UPDATE SET
+        usage_count = conversation_topics.usage_count + 1,
+        last_seen = NOW();
+END;
+$$ LANGUAGE plpgsql;
